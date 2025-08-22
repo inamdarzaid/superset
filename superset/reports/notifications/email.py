@@ -138,6 +138,13 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
 
         # Check if the report format is PDF and embedded data is available
         # Assuming self._content.report_format exists and holds the report format string
+        logger.info(
+            "PDF generation check: hasattr(report_format)=%s, report_format=%s, embedded_data=%s",
+            hasattr(self._content, 'report_format'),
+            getattr(self._content, 'report_format', 'None'),
+            self._content.embedded_data is not None
+        )
+        
         if hasattr(self._content, 'report_format') and \
            self._content.report_format == "PDF" and \
            self._content.embedded_data is not None:
@@ -179,9 +186,23 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
                     len(df.columns)
                 )
                 
-                from superset.utils.pdf import build_pdf_from_dataframe
+                # Test if we can import the function
+                try:
+                    from superset.utils.pdf import build_pdf_from_dataframe
+                    logger.info("Successfully imported build_pdf_from_dataframe")
+                except ImportError as import_ex:
+                    logger.error("Failed to import build_pdf_from_dataframe: %s", str(import_ex))
+                    raise import_ex
                 
-                logger.info("Successfully imported build_pdf_from_dataframe")
+                # Test if WeasyPrint is available
+                try:
+                    import weasyprint
+                    logger.info("WeasyPrint is available for enhanced PDF generation")
+                except ImportError as wp_ex:
+                    logger.error("WeasyPrint not available: %s", str(wp_ex))
+                    raise wp_ex
+                
+                logger.info("Calling build_pdf_from_dataframe with auto_resize_page=True")
                 
                 # Use the enhanced PDF generation with auto-sizing
                 pdf_bytes = build_pdf_from_dataframe(
@@ -300,28 +321,21 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
                 pdf_css_string = f'''
                     {" ".join(page_css_parts)}
 
-                    body {{ font-family: sans-serif; }}
+                    body {{ font-family: sans-serif; font-size: 9pt; }}
                     table {{
                         border-collapse: collapse;
                         width: 100%;
-                        page-break-inside: auto;
-                        table-layout: auto;  /* Allow columns to size naturally */
-                    }}
-                    tr {{
-                        page-break-inside: avoid;
-                        page-break-after: auto;
+                        table-layout: auto;
                     }}
                     th, td {{
                         border: 1px solid black;
-                        padding: 4px;
+                        padding: 3px;
                         text-align: left;
-                        font-size: 8pt;
-                        white-space: nowrap;  /* Prevent text wrapping that might hide columns */
-                        overflow: visible;    /* Ensure content is visible */
-                        min-width: 50px;     /* Minimum column width */
+                        font-size: 7pt;
+                        word-break: normal;
                     }}
-                    th {{ background-color: #f0f0f0; }}
-                    .report-description {{ margin-bottom: 1em; font-size: 10pt; }}
+                    th {{ background-color: #f0f0f0; font-weight: bold; }}
+                    .report-description {{ margin-bottom: 1em; }}
                 '''
                 pdf_css = CSS(string=pdf_css_string)
                 pdf_bytes = HTML(string=pdf_html_content).write_pdf(stylesheets=[pdf_css])
