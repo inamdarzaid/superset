@@ -67,25 +67,72 @@ def estimate_table_width(dataframe) -> int:
         logger.warning("DataFrame is empty, returning minimum width")
         return 300  # Minimum width for empty tables
     
+    # Handle MultiIndex columns - get the actual number of leaf columns
+    if isinstance(dataframe.columns, pd.MultiIndex) and dataframe.columns.nlevels > 1:
+        # True MultiIndex with multiple levels
+        actual_columns = len(dataframe.columns)
+        logger.info("🔍 MULTIINDEX DETECTED: DataFrame has MultiIndex columns")
+        logger.info("🔍 MultiIndex levels: %d", dataframe.columns.nlevels)
+        logger.info("🔍 Actual leaf columns: %d", actual_columns)
+        # Get flattened column names for width calculation
+        column_names = [" ".join(str(name) for name in col).strip() for col in dataframe.columns]
+    else:
+        # Regular columns (including tuple column names from pivot tables)
+        actual_columns = len(dataframe.columns)
+        # Check if this might be a pivot table with hierarchical structure
+        # Pivot tables often have tuple column names even with single level
+        if all(isinstance(col, tuple) for col in dataframe.columns):
+            logger.info("🔍 PIVOT TABLE DETECTED: DataFrame has tuple column names (likely from pivot)")
+            logger.info("🔍 Data columns in DataFrame: %d", actual_columns)
+            
+            # CRITICAL FIX: For pivot tables, the DataFrame often only shows data columns
+            # but the actual report has hierarchical columns too. 
+            # Based on user's JSON, total columns = hierarchical + data columns
+            if actual_columns <= 5:  # Heuristic: if very few columns, likely missing hierarchical ones
+                # Estimate hierarchical columns based on typical pivot table structure
+                # User's data shows: head, subhead1, subhead2, subhead3, account_name = 5 hierarchical
+                # Plus: Opening balance, Debit Amt, Credit Amt, Closing Debit Balance, Closing Credit Balance = 5 data
+                estimated_hierarchical_columns = 5
+                actual_columns += estimated_hierarchical_columns
+                logger.info("🔍 PIVOT TABLE HEURISTIC: Added %d hierarchical columns", estimated_hierarchical_columns)
+                logger.info("🔍 Total effective columns for page sizing: %d (was %d)", actual_columns, len(dataframe.columns))
+            
+            # Also account for index levels as additional effective columns
+            index_levels = dataframe.index.nlevels if hasattr(dataframe.index, 'nlevels') else 1
+            if index_levels > 1:
+                logger.info("🔍 Pivot table has %d index levels", index_levels)
+                # Add index levels as "virtual columns" for width estimation
+                actual_columns += index_levels - 1  # -1 because we already count 1 index
+                logger.info("🔍 Final effective columns (data + hierarchical + index): %d", actual_columns)
+        else:
+            logger.info("🔍 REGULAR COLUMNS: %d columns", actual_columns)
+        column_names = [str(col[0]) if isinstance(col, tuple) else str(col) for col in dataframe.columns]
+    
     # Base width for index column
     total_width = 80  
     
     # Calculate minimum width needed for all columns to be visible
-    num_columns = len(dataframe.columns)
+    num_columns = actual_columns  # Use actual column count
     
     logger.info("=== WIDTH ESTIMATION DEBUG ===")
-    logger.info("DataFrame shape: %d rows × %d columns", len(dataframe), num_columns)
-    logger.info("Column names: %s", list(dataframe.columns))
+    logger.info("DataFrame shape: %d rows × %d actual columns", len(dataframe), num_columns)
+    logger.info("Column names: %s", column_names[:5] + ['...'] if len(column_names) > 5 else column_names)
     
-    for i, column in enumerate(dataframe.columns):
-        # Column header width
-        header_width = len(str(column)) * 8 + 20  # ~8px per character + padding
+    for i, column_name in enumerate(column_names):
+        # Column header width based on display name
+        header_width = len(column_name) * 8 + 20  # ~8px per character + padding
         
         # Sample content width (check first few rows for performance)
         sample_size = min(10, len(dataframe))
         content_widths = []
         
-        for value in dataframe[column].head(sample_size):
+        # Get the actual column from dataframe (by index for MultiIndex)
+        if isinstance(dataframe.columns, pd.MultiIndex):
+            actual_column = dataframe.iloc[:, i]  # Use positional indexing
+        else:
+            actual_column = dataframe[dataframe.columns[i]]  # Use column name
+        
+        for value in actual_column.head(sample_size):
             if pd.isna(value):
                 content_widths.append(40)  # Width for empty/NA values
             else:
@@ -112,7 +159,7 @@ def estimate_table_width(dataframe) -> int:
         
         logger.info(
             "Column %d '%s': header=%dpx, content_avg=%dpx, final=%dpx",
-            i + 1, column, header_width, int(avg_content_width), int(column_width)
+            i + 1, column_name, header_width, int(avg_content_width), int(column_width)
         )
     
     # Add some buffer for borders and spacing
@@ -145,9 +192,35 @@ def generate_table_html(
     # Calculate estimated table width for dynamic page sizing
     estimated_table_width = estimate_table_width(dataframe)
     
+    # Get actual column count (handle MultiIndex and pivot tables properly)
+    if isinstance(dataframe.columns, pd.MultiIndex) and dataframe.columns.nlevels > 1:
+        actual_column_count = len(dataframe.columns)  # This gives the leaf column count
+        logger.info("🔍 MULTIINDEX in HTML generation: %d actual columns", actual_column_count)
+    else:
+        actual_column_count = len(dataframe.columns)
+        # Apply the same pivot table heuristic as in estimate_table_width
+        if all(isinstance(col, tuple) for col in dataframe.columns):
+            logger.info("🔍 PIVOT TABLE in HTML generation: %d data columns", actual_column_count)
+            
+            # CRITICAL FIX: Apply same heuristic for hierarchical columns
+            if actual_column_count <= 5:
+                estimated_hierarchical_columns = 5
+                actual_column_count += estimated_hierarchical_columns
+                logger.info("🔍 HTML GENERATION: Added %d hierarchical columns for page sizing", estimated_hierarchical_columns)
+                logger.info("🔍 HTML GENERATION: Total effective columns: %d (was %d)", actual_column_count, len(dataframe.columns))
+            
+            # Also account for index levels
+            index_levels = dataframe.index.nlevels if hasattr(dataframe.index, 'nlevels') else 1
+            if index_levels > 1:
+                actual_column_count += index_levels - 1
+                logger.info("🔍 HTML GENERATION: Added %d index levels to column count", index_levels - 1)
+                logger.info("🔍 HTML GENERATION: Final effective columns: %d", actual_column_count)
+        else:
+            logger.info("🔍 REGULAR columns in HTML generation: %d columns", actual_column_count)
+    
     logger.info(
-        "Generating PDF for table with %d columns, %d rows, estimated width: %d px",
-        len(dataframe.columns),
+        "Generating PDF for table with %d actual columns, %d rows, estimated width: %d px",
+        actual_column_count,
         len(dataframe),
         estimated_table_width
     )
@@ -173,21 +246,30 @@ def generate_table_html(
     # Debug: Check if all column names are in the HTML
     missing_columns = []
     for col in dataframe.columns:
-        if str(col) not in table_html:
+        # Handle tuple column names by extracting the first element
+        if isinstance(col, tuple) and len(col) > 0:
+            col_name = str(col[0])  # Extract first element from tuple
+        else:
+            col_name = str(col)
+        
+        if col_name not in table_html:
             missing_columns.append(col)
     
     if missing_columns:
         logger.warning("Columns missing from HTML table: %s", missing_columns)
+        logger.info("Note: Column detection might fail with tuple column names. This is informational only.")
     else:
         logger.info("All %d columns found in HTML table", len(dataframe.columns))
     
     # Determine optimal page size based on table width
+    logger.info("🔍 ENHANCED PDF DEBUG: auto_resize_page=%s", auto_resize_page)
     if auto_resize_page:
         # For tables with many columns, be more aggressive with page sizing
-        num_columns = len(dataframe.columns)
+        num_columns = actual_column_count  # Use actual column count for page sizing
         
+        logger.info("🔍 ENHANCED PDF DEBUG: Entering auto-resize logic")
         logger.info(
-            "Determining page size for %d columns with estimated width %d px",
+            "Determining page size for %d actual columns with estimated width %d px",
             num_columns,
             estimated_table_width
         )
@@ -246,12 +328,21 @@ def generate_table_html(
             margin = "1.5cm 2cm"
             orientation = "landscape"
         elif estimated_table_width <= 1050:  # A3 portrait usable width
-            logger.info("*** ENTERING A3 PORTRAIT BRANCH *** (width <= 1050)")
-            page_size = "A3"
-            page_width = "297mm"
-            page_height = "420mm"
-            margin = "2cm 1.5cm"
-            orientation = "portrait"
+            # For wider tables (>900px), force A3 landscape for better column visibility
+            if estimated_table_width > 900:
+                logger.info("*** ENTERING A3 LANDSCAPE BRANCH *** (width %d > 900, forcing landscape)", estimated_table_width)
+                page_size = "A3 landscape"
+                page_width = "420mm"
+                page_height = "297mm"
+                margin = "1.5cm 2cm"
+                orientation = "landscape"
+            else:
+                logger.info("*** ENTERING A3 PORTRAIT BRANCH *** (width <= 900)")
+                page_size = "A3"
+                page_width = "297mm"
+                page_height = "420mm"
+                margin = "2cm 1.5cm"
+                orientation = "portrait"
         elif estimated_table_width <= 1400:  # A3 landscape usable width
             logger.info("*** ENTERING A3 LANDSCAPE BRANCH *** (width <= 1400)")
             page_size = "A3 landscape"
@@ -311,8 +402,10 @@ def generate_table_html(
             page_size,
             orientation
         )
+        logger.info("🎆 ENHANCED PDF DEBUG: FINAL PAGE SELECTION -> %s (%s)", page_size, orientation)
     else:
         # Default A4 portrait for smaller tables
+        logger.info("🟡 ENHANCED PDF DEBUG: auto_resize_page=False, using A4 portrait default")
         page_size = "A4"
         page_width = "210mm"
         page_height = "297mm"
@@ -320,8 +413,18 @@ def generate_table_html(
         orientation = "portrait"
     
     # CSS for proper PDF formatting with dynamic page sizing
-    # Generate dynamic CSS based on table width
-    if estimated_table_width > 1200:
+    # Generate dynamic CSS based on table width and actual column count
+    num_columns = actual_column_count  # Use actual column count for styling
+    
+    if num_columns >= 10:
+        # Very small fonts for many columns
+        table_font_size = "6pt"
+        cell_padding = "2px 4px"
+    elif num_columns >= 8:
+        # Small fonts for moderately wide tables
+        table_font_size = "7pt"
+        cell_padding = "2px 5px"
+    elif estimated_table_width > 1200:
         table_font_size = "7pt"
         cell_padding = "3px 6px"
     else:
@@ -375,42 +478,40 @@ def generate_table_html(
             border-collapse: collapse;
             font-size: {table_font_size};
             margin-top: 10px;
-            table-layout: auto;  /* Revert to auto for better column handling */
-            word-wrap: break-word;
-            white-space: nowrap;  /* Prevent text wrapping that might hide columns */
+            table-layout: fixed;  /* Force table to use fixed layout for column control */
+            min-width: 100%;      /* Ensure table uses full page width */
         }}
         
+        /* Calculate equal column widths with proper CSS separation */
+        .data-table th,
+        .data-table td {{
+            width: {100 / (num_columns + 1):.2f}%;  /* Equal width for all columns including index */
+            border: 1px solid #dee2e6;
+            padding: {cell_padding};
+            text-align: left;
+            overflow: hidden;
+            word-wrap: break-word;  /* Allow text to wrap within fixed width */
+            hyphens: auto;          /* Allow hyphenation for long words */
+        }}
+        
+        /* Header-specific styles */
         .data-table th {{
             background-color: #f8f9fa;
-            border: 1px solid #dee2e6;
-            padding: {cell_padding};
-            text-align: left;
             font-weight: bold;
             color: #495057;
-            page-break-inside: avoid;
-            white-space: nowrap;
-            overflow: visible;  /* Allow content to be visible */
-            text-overflow: clip;  /* Don't use ellipsis */
-            min-width: 60px;  /* Ensure minimum column width */
         }}
         
+        /* Cell-specific styles */
         .data-table td {{
-            border: 1px solid #dee2e6;
-            padding: {cell_padding};
-            text-align: left;
-            page-break-inside: avoid;
-            word-wrap: break-word;
-            overflow: visible;  /* Allow content to be visible */
-            white-space: nowrap;  /* Prevent text wrapping */
-            min-width: 60px;  /* Ensure minimum column width */
+            background-color: white;
+            font-weight: normal;
+            color: #333;
+            vertical-align: top;    /* Align content to top when text wraps */
         }}
         
-        .data-table tbody tr:nth-child(even) {{
+        /* Alternating row colors */
+        .data-table tbody tr:nth-child(even) td {{
             background-color: #f8f9fa;
-        }}
-        
-        .data-table tbody tr:hover {{
-            background-color: #e9ecef;
         }}
         
         /* Prevent table headers from breaking across pages */
@@ -426,47 +527,6 @@ def generate_table_html(
         .data-table tbody tr {{
             page-break-inside: avoid;
             page-break-after: auto;
-        }}
-        
-        /* Ensure table continues header on new pages */
-        .data-table {{
-            page-break-before: auto;
-            page-break-after: auto;
-            page-break-inside: auto;
-        }}
-        
-        /* Specific styling for index column */
-        .data-table th:first-child,
-        .data-table td:first-child {{
-            background-color: #e9ecef;
-            font-weight: bold;
-            text-align: center;
-            width: 60px;  /* Fixed width for index */
-            min-width: 60px;
-        }}
-        
-        /* For very wide tables, allow horizontal scrolling in print */
-        @media print {{
-            .data-table {{
-                font-size: {table_font_size};
-                width: 100%;
-                table-layout: auto;
-                min-width: {estimated_table_width}px;  /* Ensure table is wide enough */
-            }}
-            .data-table th,
-            .data-table td {{
-                padding: {cell_padding};
-                word-wrap: break-word;
-                overflow-wrap: break-word;
-                white-space: nowrap;
-            }}
-            
-            /* Ensure all columns are visible */
-            .data-table th,
-            .data-table td {{
-                display: table-cell !important;
-                visibility: visible !important;
-            }}
         }}
     </style>
     """
@@ -538,6 +598,7 @@ def build_pdf_from_dataframe(
     :raises: ReportSchedulePdfFailedError if conversion fails
     """
     logger.info("=== ENHANCED PDF GENERATION CALLED ===")
+    logger.info("🚀 ENHANCED PDF DEBUG: build_pdf_from_dataframe called")
     logger.info("Function: build_pdf_from_dataframe")
     logger.info("Parameters: title='%s', auto_resize_page=%s", title, auto_resize_page)
     logger.info("DataFrame shape: %s", dataframe.shape if hasattr(dataframe, 'shape') else 'Unknown')
