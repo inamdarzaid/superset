@@ -171,70 +171,97 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
                 footer_content_str = footer_content_str.replace("{report_name}", css_report_name)
 
 
-            pdf_html_content = f"""
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <style>
-                    :root {{
-                        /* Keeping these for potential use in body styles if needed */
-                        --report-name-var: "{report_name_val.replace('"', '&quot;').replace("'", "&apos;")}";
-                        --generation-date-var: "{generation_date_val}";
+            # Try to use enhanced PDF generation with dynamic sizing
+            try:
+                from superset.utils.pdf import build_pdf_from_dataframe
+                
+                # Use the enhanced PDF generation with auto-sizing
+                pdf_bytes = build_pdf_from_dataframe(
+                    dataframe=df,
+                    title=report_name_val,
+                    description=description,
+                    auto_resize_page=True  # Enable dynamic page sizing
+                )
+                
+                pdf_data = {__("%(name)s.pdf", name=report_name_val): pdf_bytes}
+                # Set html_table to empty as the table is in the PDF
+                html_table = ""
+                
+                logger.info(
+                    "Generated PDF using enhanced dynamic sizing for table with %d rows, %d columns",
+                    len(df),
+                    len(df.columns)
+                )
+                
+            except Exception as ex:
+                logger.warning(
+                    "Failed to use enhanced PDF generation, falling back to basic PDF: %s", 
+                    str(ex)
+                )
+                # Original PDF generation logic as fallback
+                pdf_html_content = f"""
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <style>
+                        :root {{
+                            /* Keeping these for potential use in body styles if needed */
+                            --report-name-var: "{report_name_val.replace('"', '&quot;').replace("'", "&apos;")}";
+                            --generation-date-var: "{generation_date_val}";
+                        }}
+                    </style>
+                </head>
+                <body>
+                    <div class="report-description">{description}</div>
+                    <br>
+                    {df.to_html(na_rep="", index=True, escape=False)}
+                </body>
+                </html>
+                """
+
+                # Construct @page CSS string
+                page_css_parts = [f"@page {{ size: {pdf_page_size} {pdf_orientation}; margin: 2.5cm 1.5cm 2cm 1.5cm; }}"]
+                if pdf_headers_footers_enabled:
+                    # Assuming header template is for @top-center and footer for @bottom-center
+                    # A more complex mapping from template to specific corners would require more logic
+                    page_css_parts.append(f"@page @top-center {{ content: \"{header_content_str}\"; font-size: 9pt; color: #333; }}")
+                    page_css_parts.append(f"@page @bottom-center {{ content: \"{footer_content_str}\"; font-size: 9pt; color: #333; }}")
+                else:
+                    # Ensure no headers/footers if disabled
+                    page_css_parts.append("@page @top-left { content: \"\"; }")
+                    page_css_parts.append("@page @top-center { content: \"\"; }")
+                    page_css_parts.append("@page @top-right { content: \"\"; }")
+                    page_css_parts.append("@page @bottom-left { content: \"\"; }")
+                    page_css_parts.append("@page @bottom-center { content: \"\"; }")
+                    page_css_parts.append("@page @bottom-right { content: \"\"; }")
+
+                pdf_css_string = f'''
+                    {" ".join(page_css_parts)}
+
+                    body {{ font-family: sans-serif; }}
+                    table {{
+                        border-collapse: collapse;
+                        width: 100%;
+                        page-break-inside: auto;
                     }}
-                </style>
-            </head>
-            <body>
-                <div class="report-description">{description}</div>
-                <br>
-                {df.to_html(na_rep="", index=True, escape=False)}
-            </body>
-            </html>
-            """
-
-            # Construct @page CSS string
-            page_css_parts = [f"@page {{ size: {pdf_page_size} {pdf_orientation}; margin: 2.5cm 1.5cm 2cm 1.5cm; }}"]
-            if pdf_headers_footers_enabled:
-                # Assuming header template is for @top-center and footer for @bottom-center
-                # A more complex mapping from template to specific corners would require more logic
-                page_css_parts.append(f"@page @top-center {{ content: \"{header_content_str}\"; font-size: 9pt; color: #333; }}")
-                page_css_parts.append(f"@page @bottom-center {{ content: \"{footer_content_str}\"; font-size: 9pt; color: #333; }}")
-            else:
-                # Ensure no headers/footers if disabled
-                page_css_parts.append("@page @top-left { content: \"\"; }")
-                page_css_parts.append("@page @top-center { content: \"\"; }")
-                page_css_parts.append("@page @top-right { content: \"\"; }")
-                page_css_parts.append("@page @bottom-left { content: \"\"; }")
-                page_css_parts.append("@page @bottom-center { content: \"\"; }")
-                page_css_parts.append("@page @bottom-right { content: \"\"; }")
-
-
-            pdf_css_string = f'''
-                {" ".join(page_css_parts)}
-
-                body {{ font-family: sans-serif; }}
-                table {{
-                    border-collapse: collapse;
-                    width: 100%;
-                    page-break-inside: auto;
-                }}
-                tr {{
-                    page-break-inside: avoid;
-                    page-break-after: auto;
-                }}
-                th, td {{
-                    border: 1px solid black;
-                    padding: 4px;
-                    text-align: left;
-                    font-size: 8pt;
-                }}
-                th {{ background-color: #f0f0f0; }}
-                .report-description {{ margin-bottom: 1em; font-size: 10pt; }}
-            '''
-            pdf_css = CSS(string=pdf_css_string)
-            pdf_bytes = HTML(string=pdf_html_content).write_pdf(stylesheets=[pdf_css])
-            pdf_data = {__("%(name)s.pdf", name=report_name_val): pdf_bytes}
-            # Set html_table to empty as the table is in the PDF
-            html_table = ""
+                    tr {{
+                        page-break-inside: avoid;
+                        page-break-after: auto;
+                    }}
+                    th, td {{
+                        border: 1px solid black;
+                        padding: 4px;
+                        text-align: left;
+                        font-size: 8pt;
+                    }}
+                    th {{ background-color: #f0f0f0; }}
+                    .report-description {{ margin-bottom: 1em; font-size: 10pt; }}
+                '''
+                pdf_css = CSS(string=pdf_css_string)
+                pdf_bytes = HTML(string=pdf_html_content).write_pdf(stylesheets=[pdf_css])
+                pdf_data = {__("%(name)s.pdf", name=report_name_val): pdf_bytes}
+                # Set html_table to empty as the table is in the PDF
+                html_table = ""
         else:
             # Existing logic for HTML email
             if self._content.embedded_data is not None:
