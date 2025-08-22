@@ -19,8 +19,6 @@ import logging
 from io import BytesIO
 from typing import Optional
 
-from superset.commands.report.exceptions import ReportSchedulePdfFailedError
-
 logger = logging.getLogger(__name__)
 
 try:
@@ -45,6 +43,15 @@ except (ModuleNotFoundError, OSError) as e:
     weasyprint = None
     WEASYPRINT_AVAILABLE = False
 
+# Import ReportSchedulePdfFailedError safely
+try:
+    from superset.commands.report.exceptions import ReportSchedulePdfFailedError
+except ImportError:
+    # Create a simple exception class for standalone use
+    class ReportSchedulePdfFailedError(Exception):
+        """Exception raised when PDF generation fails."""
+        pass
+
 
 def estimate_table_width(dataframe) -> int:
     """
@@ -57,6 +64,7 @@ def estimate_table_width(dataframe) -> int:
         raise ReportSchedulePdfFailedError("pandas is required for table width estimation")
         
     if dataframe.empty:
+        logger.warning("DataFrame is empty, returning minimum width")
         return 300  # Minimum width for empty tables
     
     # Base width for index column
@@ -65,9 +73,11 @@ def estimate_table_width(dataframe) -> int:
     # Calculate minimum width needed for all columns to be visible
     num_columns = len(dataframe.columns)
     
-    logger.info("Estimating width for table with %d columns", num_columns)
+    logger.info("=== WIDTH ESTIMATION DEBUG ===")
+    logger.info("DataFrame shape: %d rows × %d columns", len(dataframe), num_columns)
+    logger.info("Column names: %s", list(dataframe.columns))
     
-    for column in dataframe.columns:
+    for i, column in enumerate(dataframe.columns):
         # Column header width
         header_width = len(str(column)) * 8 + 20  # ~8px per character + padding
         
@@ -99,11 +109,19 @@ def estimate_table_width(dataframe) -> int:
             column_width = min(column_width, 300)  # Larger max for few columns
         
         total_width += column_width
+        
+        logger.info(
+            "Column %d '%s': header=%dpx, content_avg=%dpx, final=%dpx",
+            i + 1, column, header_width, int(avg_content_width), int(column_width)
+        )
     
     # Add some buffer for borders and spacing
     total_width += num_columns * 2  # 2px per column for borders
     
-    logger.info("Estimated total width: %d pixels for %d columns", total_width, num_columns)
+    logger.info("=== WIDTH ESTIMATION RESULT ===")
+    logger.info("Total estimated width: %d pixels for %d columns", total_width, num_columns)
+    logger.info("Average width per column: %d pixels", total_width // (num_columns + 1) if num_columns > 0 else 0)
+    
     return int(total_width)
 
 
@@ -174,7 +192,16 @@ def generate_table_html(
             estimated_table_width
         )
         
+        logger.info("=== PAGE SIZE DECISION TREE ===")
+        logger.info("Testing conditions:")
+        logger.info("  - num_columns >= 10: %s (%d >= 10)", num_columns >= 10, num_columns)
+        logger.info("  - num_columns >= 8: %s (%d >= 8)", num_columns >= 8, num_columns)
+        logger.info("  - estimated_width <= 550: %s (%d <= 550)", estimated_table_width <= 550, estimated_table_width)
+        logger.info("  - estimated_width <= 750: %s (%d <= 750)", estimated_table_width <= 750, estimated_table_width)
+        logger.info("  - estimated_width <= 1050: %s (%d <= 1050)", estimated_table_width <= 1050, estimated_table_width)
+        
         if num_columns >= 10:  # Tables with 10+ columns need larger formats
+            logger.info("*** ENTERING 10+ COLUMNS BRANCH ***")
             # Force A3 landscape or larger for many columns
             if estimated_table_width <= 1050:
                 page_size = "A3 landscape"
@@ -182,7 +209,9 @@ def generate_table_html(
                 page_height = "297mm"
                 margin = "1.5cm 2cm"
                 orientation = "landscape"
+                logger.info("Selected A3 landscape for %d columns (width=%d <= 1050)", num_columns, estimated_table_width)
             else:
+                logger.info("Width %d > 1050, calculating custom size", estimated_table_width)
                 # Custom size for very wide tables
                 table_width_mm = int(estimated_table_width / 3.78)
                 margin_mm = 40
@@ -194,37 +223,44 @@ def generate_table_html(
                 page_size = f"{page_width} {page_height}"
                 margin = "2cm 2cm"
                 orientation = f"custom ({page_width_mm}mm wide)"
+                logger.info("Custom size calculated: %s", page_size)
         elif num_columns >= 8:  # Tables with 8-9 columns need A3
+            logger.info("*** ENTERING 8-9 COLUMNS BRANCH ***")
             page_size = "A3 landscape"
             page_width = "420mm"
             page_height = "297mm"
             margin = "1.5cm 2cm"
             orientation = "landscape"
         elif estimated_table_width <= 550:  # A4 portrait usable width
+            logger.info("*** ENTERING A4 PORTRAIT BRANCH *** (width <= 550)")
             page_size = "A4"
             page_width = "210mm"
             page_height = "297mm"
             margin = "2cm 1.5cm"
             orientation = "portrait"
         elif estimated_table_width <= 750:  # A4 landscape usable width
+            logger.info("*** ENTERING A4 LANDSCAPE BRANCH *** (width <= 750)")
             page_size = "A4 landscape"
             page_width = "297mm"
             page_height = "210mm"
             margin = "1.5cm 2cm"
             orientation = "landscape"
         elif estimated_table_width <= 1050:  # A3 portrait usable width
+            logger.info("*** ENTERING A3 PORTRAIT BRANCH *** (width <= 1050)")
             page_size = "A3"
             page_width = "297mm"
             page_height = "420mm"
             margin = "2cm 1.5cm"
             orientation = "portrait"
         elif estimated_table_width <= 1400:  # A3 landscape usable width
+            logger.info("*** ENTERING A3 LANDSCAPE BRANCH *** (width <= 1400)")
             page_size = "A3 landscape"
             page_width = "420mm"
             page_height = "297mm"
             margin = "1.5cm 2cm"
             orientation = "landscape"
         elif estimated_table_width <= 2000:  # A2 landscape usable width
+            logger.info("*** ENTERING A2 LANDSCAPE BRANCH *** (width <= 2000)")
             page_size = "A2 landscape"
             page_width = "594mm"
             page_height = "420mm"
@@ -501,6 +537,14 @@ def build_pdf_from_dataframe(
     :return: PDF bytes
     :raises: ReportSchedulePdfFailedError if conversion fails
     """
+    logger.info("=== ENHANCED PDF GENERATION CALLED ===")
+    logger.info("Function: build_pdf_from_dataframe")
+    logger.info("Parameters: title='%s', auto_resize_page=%s", title, auto_resize_page)
+    logger.info("DataFrame shape: %s", dataframe.shape if hasattr(dataframe, 'shape') else 'Unknown')
+    
+    if hasattr(dataframe, 'columns'):
+        logger.info("DataFrame columns: %s", list(dataframe.columns))
+    
     logger.info("Starting build_pdf_from_dataframe with auto_resize_page=%s", auto_resize_page)
     
     if pd is None:

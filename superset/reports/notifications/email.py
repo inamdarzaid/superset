@@ -238,7 +238,29 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
                         "ReportLab fallback also failed: %s. Using basic A4 portrait PDF.", 
                         str(reportlab_ex)
                     )
-                # Original PDF generation logic as fallback
+                # Original PDF generation logic as fallback - but with improved column handling
+                logger.warning("Using fallback PDF generation with improved column handling")
+                
+                # For tables with many columns, use landscape and ensure all columns are included
+                num_columns = len(df.columns)
+                logger.info("Fallback PDF: DataFrame has %d columns", num_columns)
+                
+                if num_columns >= 10:
+                    # Force A3 landscape for many columns
+                    fallback_page_size = "A3"
+                    fallback_orientation = "landscape"
+                    logger.info("Fallback: Using A3 landscape for %d columns", num_columns)
+                elif num_columns >= 8:
+                    # Force A4 landscape for 8-9 columns
+                    fallback_page_size = "A4"
+                    fallback_orientation = "landscape"
+                    logger.info("Fallback: Using A4 landscape for %d columns", num_columns)
+                else:
+                    # Use configured defaults for fewer columns
+                    fallback_page_size = pdf_page_size
+                    fallback_orientation = pdf_orientation
+                    logger.info("Fallback: Using configured %s %s for %d columns", fallback_page_size, fallback_orientation, num_columns)
+                
                 pdf_html_content = f"""
                 <html>
                 <head>
@@ -254,13 +276,13 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
                 <body>
                     <div class="report-description">{description}</div>
                     <br>
-                    {df.to_html(na_rep="", index=True, escape=False)}
+                    {df.to_html(na_rep="", index=True, escape=False, max_cols=None, max_rows=None)}
                 </body>
                 </html>
                 """
 
-                # Construct @page CSS string
-                page_css_parts = [f"@page {{ size: {pdf_page_size} {pdf_orientation}; margin: 2.5cm 1.5cm 2cm 1.5cm; }}"]
+                # Construct @page CSS string with dynamic sizing
+                page_css_parts = [f"@page {{ size: {fallback_page_size} {fallback_orientation}; margin: 2.5cm 1.5cm 2cm 1.5cm; }}"]
                 if pdf_headers_footers_enabled:
                     # Assuming header template is for @top-center and footer for @bottom-center
                     # A more complex mapping from template to specific corners would require more logic
@@ -283,6 +305,7 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
                         border-collapse: collapse;
                         width: 100%;
                         page-break-inside: auto;
+                        table-layout: auto;  /* Allow columns to size naturally */
                     }}
                     tr {{
                         page-break-inside: avoid;
@@ -293,6 +316,9 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
                         padding: 4px;
                         text-align: left;
                         font-size: 8pt;
+                        white-space: nowrap;  /* Prevent text wrapping that might hide columns */
+                        overflow: visible;    /* Ensure content is visible */
+                        min-width: 50px;     /* Minimum column width */
                     }}
                     th {{ background-color: #f0f0f0; }}
                     .report-description {{ margin-bottom: 1em; font-size: 10pt; }}
