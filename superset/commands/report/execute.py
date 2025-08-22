@@ -75,7 +75,7 @@ from superset.utils import json
 from superset.utils.core import HeaderDataType, override_user, recipients_string_to_list
 from superset.utils.csv import get_chart_csv_data, get_chart_dataframe
 from superset.utils.decorators import logs_context, transaction
-from superset.utils.pdf import build_pdf_from_screenshots
+from superset.utils.pdf import build_pdf_from_screenshots, build_pdf_from_dataframe
 from superset.utils.screenshots import ChartScreenshot, DashboardScreenshot
 from superset.utils.slack import get_channels_with_search, SlackChannelTypes
 from superset.utils.urls import get_url_path
@@ -372,9 +372,38 @@ class BaseReportState:
         Get chart or dashboard pdf
         :raises: ReportSchedulePdfFailedError
         """
+        # For chart reports, try to use embedded data first for better multi-page PDF support
+        if (
+            self._report_schedule.chart
+            and self._report_schedule.chart.viz_type in [
+                "table", "pivot_table", "pivot_table_v2"
+            ]
+        ):
+            try:
+                # Get the full data as DataFrame
+                embedded_data = self._get_embedded_data()
+                if embedded_data is not None and not embedded_data.empty:
+                    # Generate PDF from the full DataFrame using HTML conversion
+                    title = self._report_schedule.name or "Report"
+                    description = (
+                        self._report_schedule.description 
+                        or f"Data export from chart: {self._report_schedule.chart.slice_name}"
+                    )
+                    logger.info(
+                        "Generating PDF from embedded data for chart %s with %d rows",
+                        self._report_schedule.chart.id,
+                        len(embedded_data)
+                    )
+                    return build_pdf_from_dataframe(embedded_data, title, description)
+            except Exception as ex:
+                logger.warning(
+                    "Failed to generate PDF from embedded data, falling back to screenshot: %s", 
+                    str(ex)
+                )
+        
+        # Fallback to screenshot-based PDF generation
         screenshots = self._get_screenshots()
         pdf = build_pdf_from_screenshots(screenshots)
-
         return pdf
 
     def _get_csv_data(self) -> bytes:
