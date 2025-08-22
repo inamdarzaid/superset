@@ -19,11 +19,16 @@ import logging
 from io import BytesIO
 from typing import Optional
 
-import pandas as pd
-
 from superset.commands.report.exceptions import ReportSchedulePdfFailedError
 
 logger = logging.getLogger(__name__)
+
+try:
+    import pandas as pd
+except ModuleNotFoundError:
+    logger.info("No pandas installation found")
+    pd = None
+    
 try:
     from PIL import Image
 except ModuleNotFoundError:
@@ -36,13 +41,16 @@ except ModuleNotFoundError:
     weasyprint = None
 
 
-def estimate_table_width(dataframe: pd.DataFrame) -> int:
+def estimate_table_width(dataframe) -> int:
     """
     Estimate the width required for a table based on its content.
     
     :param dataframe: The pandas DataFrame to analyze
     :return: Estimated width in pixels
     """
+    if pd is None:
+        raise ReportSchedulePdfFailedError("pandas is required for table width estimation")
+        
     if dataframe.empty:
         return 300  # Minimum width for empty tables
     
@@ -78,7 +86,7 @@ def estimate_table_width(dataframe: pd.DataFrame) -> int:
 
 
 def generate_table_html(
-    dataframe: pd.DataFrame, 
+    dataframe, 
     title: str = "Report", 
     description: str = "",
     auto_resize_page: bool = True
@@ -92,6 +100,8 @@ def generate_table_html(
     :param auto_resize_page: Whether to automatically resize page based on table width
     :return: Complete HTML document string
     """
+    if pd is None:
+        raise ReportSchedulePdfFailedError("pandas is required for HTML table generation")
     # Calculate estimated table width for dynamic page sizing
     estimated_table_width = estimate_table_width(dataframe)
     
@@ -175,6 +185,14 @@ def generate_table_html(
         orientation = "portrait"
     
     # CSS for proper PDF formatting with dynamic page sizing
+    # Generate dynamic CSS based on table width
+    if estimated_table_width > 1200:
+        table_font_size = "7pt"
+        cell_padding = "3px 6px"
+    else:
+        table_font_size = "8pt"
+        cell_padding = "4px 8px"
+    
     css_styles = f"""
     <style type="text/css">
         @page {{
@@ -198,24 +216,24 @@ def generate_table_html(
             overflow-x: auto;
         }}
         
-        .header {
+        .header {{
             margin-bottom: 20px;
             padding-bottom: 10px;
             border-bottom: 2px solid #e0e0e0;
-        }
+        }}
         
-        .title {
+        .title {{
             font-size: 18pt;
             font-weight: bold;
             color: #2c3e50;
             margin-bottom: 8px;
-        }
+        }}
         
-        .description {
+        .description {{
             font-size: 11pt;
             color: #666;
             margin-bottom: 10px;
-        }
+        }}
         
         .data-table {{
             width: 100%;
@@ -250,35 +268,35 @@ def generate_table_html(
             overflow: hidden;
         }}
         
-        .data-table tbody tr:nth-child(even) {
+        .data-table tbody tr:nth-child(even) {{
             background-color: #f8f9fa;
-        }
+        }}
         
-        .data-table tbody tr:hover {
+        .data-table tbody tr:hover {{
             background-color: #e9ecef;
-        }
+        }}
         
         /* Prevent table headers from breaking across pages */
-        .data-table thead {
+        .data-table thead {{
             display: table-header-group;
-        }
+        }}
         
-        .data-table tbody {
+        .data-table tbody {{
             display: table-row-group;
-        }
+        }}
         
         /* Allow page breaks within table body */
-        .data-table tbody tr {
+        .data-table tbody tr {{
             page-break-inside: avoid;
             page-break-after: auto;
-        }
+        }}
         
         /* Ensure table continues header on new pages */
-        .data-table {
+        .data-table {{
             page-break-before: auto;
             page-break-after: auto;
             page-break-inside: auto;
-        }
+        }}
         
         /* Specific styling for index column */
         .data-table th:first-child,
@@ -294,11 +312,11 @@ def generate_table_html(
         /* Responsive adjustments for very wide tables */
         @media print {{
             .data-table {{
-                font-size: {"7pt" if estimated_table_width > 1200 else "8pt"};
+                font-size: {table_font_size};
             }}
             .data-table th,
             .data-table td {{
-                padding: {"3px 6px" if estimated_table_width > 1200 else "4px 8px"};
+                padding: {cell_padding};
             }}
         }}
     </style>
@@ -355,7 +373,7 @@ def build_pdf_from_html(html_content: str) -> bytes:
 
 
 def build_pdf_from_dataframe(
-    dataframe: pd.DataFrame, 
+    dataframe, 
     title: str = "Report", 
     description: str = "",
     auto_resize_page: bool = True
@@ -370,6 +388,8 @@ def build_pdf_from_dataframe(
     :return: PDF bytes
     :raises: ReportSchedulePdfFailedError if conversion fails
     """
+    if pd is None:
+        raise ReportSchedulePdfFailedError("pandas is required for DataFrame to PDF conversion")
     try:
         html_content = generate_table_html(dataframe, title, description, auto_resize_page)
         return build_pdf_from_html(html_content)
