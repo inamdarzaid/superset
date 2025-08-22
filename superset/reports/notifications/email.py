@@ -173,7 +173,15 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
 
             # Try to use enhanced PDF generation with dynamic sizing
             try:
+                logger.info(
+                    "Starting enhanced PDF generation for table with %d rows, %d columns",
+                    len(df),
+                    len(df.columns)
+                )
+                
                 from superset.utils.pdf import build_pdf_from_dataframe
+                
+                logger.info("Successfully imported build_pdf_from_dataframe")
                 
                 # Use the enhanced PDF generation with auto-sizing
                 pdf_bytes = build_pdf_from_dataframe(
@@ -183,21 +191,53 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
                     auto_resize_page=True  # Enable dynamic page sizing
                 )
                 
+                logger.info("Successfully generated PDF bytes, size: %d bytes", len(pdf_bytes))
+                
                 pdf_data = {__("%(name)s.pdf", name=report_name_val): pdf_bytes}
                 # Set html_table to empty as the table is in the PDF
                 html_table = ""
                 
                 logger.info(
-                    "Generated PDF using enhanced dynamic sizing for table with %d rows, %d columns",
+                    "Successfully generated PDF using enhanced dynamic sizing for table with %d rows, %d columns",
                     len(df),
                     len(df.columns)
                 )
                 
             except Exception as ex:
-                logger.warning(
-                    "Failed to use enhanced PDF generation, falling back to basic PDF: %s", 
-                    str(ex)
+                logger.error(
+                    "Failed to use enhanced PDF generation, falling back to basic PDF. Error: %s, Type: %s", 
+                    str(ex),
+                    type(ex).__name__
                 )
+                import traceback
+                logger.error("Full traceback: %s", traceback.format_exc())
+                
+                # Try ReportLab as a secondary fallback for dynamic sizing
+                try:
+                    logger.info("Attempting ReportLab fallback for dynamic page sizing")
+                    from superset.utils.pdf_reportlab import build_pdf_from_dataframe_reportlab
+                    
+                    pdf_bytes = build_pdf_from_dataframe_reportlab(
+                        dataframe=df,
+                        title=report_name_val,
+                        description=description,
+                        auto_resize_page=True  # Enable dynamic page sizing with ReportLab
+                    )
+                    
+                    pdf_data = {__("%(name)s.pdf", name=report_name_val): pdf_bytes}
+                    html_table = ""
+                    
+                    logger.info(
+                        "Successfully generated PDF using ReportLab fallback with dynamic sizing for table with %d rows, %d columns",
+                        len(df),
+                        len(df.columns)
+                    )
+                    
+                except Exception as reportlab_ex:
+                    logger.warning(
+                        "ReportLab fallback also failed: %s. Using basic A4 portrait PDF.", 
+                        str(reportlab_ex)
+                    )
                 # Original PDF generation logic as fallback
                 pdf_html_content = f"""
                 <html>

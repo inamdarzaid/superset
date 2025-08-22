@@ -36,9 +36,14 @@ except ModuleNotFoundError:
     
 try:
     import weasyprint
-except ModuleNotFoundError:
-    logger.info("No WeasyPrint installation found - HTML to PDF conversion not available")
+    WEASYPRINT_AVAILABLE = True
+    logger.info("WeasyPrint successfully imported")
+except (ModuleNotFoundError, OSError) as e:
+    logger.error("WeasyPrint not available: %s", str(e))
+    logger.error("Multi-page PDF with dynamic sizing will not be available")
+    logger.error("Please install GTK system libraries or use alternative PDF generation")
     weasyprint = None
+    WEASYPRINT_AVAILABLE = False
 
 
 def estimate_table_width(dataframe) -> int:
@@ -54,7 +59,13 @@ def estimate_table_width(dataframe) -> int:
     if dataframe.empty:
         return 300  # Minimum width for empty tables
     
-    total_width = 80  # Base width for index column
+    # Base width for index column
+    total_width = 80  
+    
+    # Calculate minimum width needed for all columns to be visible
+    num_columns = len(dataframe.columns)
+    
+    logger.info("Estimating width for table with %d columns", num_columns)
     
     for column in dataframe.columns:
         # Column header width
@@ -66,22 +77,33 @@ def estimate_table_width(dataframe) -> int:
         
         for value in dataframe[column].head(sample_size):
             if pd.isna(value):
-                content_widths.append(30)  # Width for empty/NA values
+                content_widths.append(40)  # Width for empty/NA values
             else:
                 # Estimate based on string length
                 str_value = str(value)
                 if len(str_value) > 50:  # Very long content
-                    content_widths.append(400)  # Cap at reasonable width
+                    content_widths.append(300)  # Cap at reasonable width but higher than before
                 else:
                     content_widths.append(len(str_value) * 8 + 16)
         
         # Use the maximum of header width and average content width
-        avg_content_width = sum(content_widths) / len(content_widths) if content_widths else 50
-        column_width = max(header_width, avg_content_width, 80)  # Minimum 80px per column
-        column_width = min(column_width, 250)  # Maximum 250px per column to prevent excessive width
+        avg_content_width = sum(content_widths) / len(content_widths) if content_widths else 60
+        column_width = max(header_width, avg_content_width, 90)  # Increased minimum width
+        
+        # For tables with many columns, use smaller max width per column
+        if num_columns > 8:
+            column_width = min(column_width, 180)  # Smaller max for many columns
+        elif num_columns > 5:
+            column_width = min(column_width, 220)  # Medium max for moderate columns
+        else:
+            column_width = min(column_width, 300)  # Larger max for few columns
         
         total_width += column_width
     
+    # Add some buffer for borders and spacing
+    total_width += num_columns * 2  # 2px per column for borders
+    
+    logger.info("Estimated total width: %d pixels for %d columns", total_width, num_columns)
     return int(total_width)
 
 
@@ -112,14 +134,34 @@ def generate_table_html(
         estimated_table_width
     )
     
-    # Convert DataFrame to HTML table
+    # Convert DataFrame to HTML table with better column handling
     table_html = dataframe.to_html(
         na_rep="", 
         index=True, 
         escape=False,
         classes="data-table",
-        table_id="report-table"
+        table_id="report-table",
+        max_cols=None,  # Don't limit columns
+        max_rows=None   # Don't limit rows
     )
+    
+    # Debug: Log information about the generated table
+    logger.info(
+        "Generated HTML table with %d columns (including index). Table HTML length: %d characters",
+        len(dataframe.columns) + 1,  # +1 for index column
+        len(table_html)
+    )
+    
+    # Debug: Check if all column names are in the HTML
+    missing_columns = []
+    for col in dataframe.columns:
+        if str(col) not in table_html:
+            missing_columns.append(col)
+    
+    if missing_columns:
+        logger.warning("Columns missing from HTML table: %s", missing_columns)
+    else:
+        logger.info("All %d columns found in HTML table", len(dataframe.columns))
     
     # Determine optimal page size based on table width
     if auto_resize_page:
@@ -155,20 +197,27 @@ def generate_table_html(
             orientation = "landscape"
         else:
             # For very wide tables, calculate custom size
-            # Convert pixels to mm (roughly 3.78 pixels per mm)
+            # Convert pixels to mm (roughly 3.78 pixels per mm at 96 DPI)
             table_width_mm = int(estimated_table_width / 3.78)
             margin_mm = 40  # 2cm margins on each side
             page_width_mm = table_width_mm + margin_mm
             
             # Ensure reasonable minimum and maximum page sizes
             page_width_mm = max(page_width_mm, 420)  # At least A3 landscape width
-            page_width_mm = min(page_width_mm, 1682)  # Max A0 width
+            page_width_mm = min(page_width_mm, 2000)  # Increased max width for very wide tables
             
             page_width = f"{page_width_mm}mm"
             page_height = "420mm"  # Use A2 height for very wide tables
             page_size = f"{page_width} {page_height}"
             margin = "2cm 2cm"
-            orientation = "custom"
+            orientation = f"custom ({page_width_mm}mm wide)"
+            
+            logger.info(
+                "Using custom page size %s for %d columns with total width %d px",
+                page_size,
+                len(dataframe.columns),
+                estimated_table_width
+            )
         
         logger.info(
             "Selected page size: %s (%s) for table width %d px",
@@ -238,16 +287,16 @@ def generate_table_html(
         .data-table {{
             width: 100%;
             border-collapse: collapse;
-            font-size: 8pt;
+            font-size: {table_font_size};
             margin-top: 10px;
-            table-layout: auto;
+            table-layout: fixed;  /* Use fixed layout for better control */
             word-wrap: break-word;
         }}
         
         .data-table th {{
             background-color: #f8f9fa;
             border: 1px solid #dee2e6;
-            padding: 6px 8px;
+            padding: {cell_padding};
             text-align: left;
             font-weight: bold;
             color: #495057;
@@ -255,17 +304,17 @@ def generate_table_html(
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            max-width: 150px;
+            /* Remove max-width constraint to prevent column truncation */
         }}
         
         .data-table td {{
             border: 1px solid #dee2e6;
-            padding: 4px 8px;
+            padding: {cell_padding};
             text-align: left;
             page-break-inside: avoid;
             word-wrap: break-word;
-            max-width: 150px;
             overflow: hidden;
+            /* Remove max-width constraint to prevent column truncation */
         }}
         
         .data-table tbody tr:nth-child(even) {{
@@ -304,19 +353,36 @@ def generate_table_html(
             background-color: #e9ecef;
             font-weight: bold;
             text-align: center;
-            width: 60px;
-            min-width: 60px;
-            max-width: 80px;
+            width: 8%;  /* Use percentage instead of fixed width */
+            min-width: 50px;
         }}
         
-        /* Responsive adjustments for very wide tables */
+        /* Dynamic column width based on number of columns */
+        .data-table th:not(:first-child),
+        .data-table td:not(:first-child) {{
+            width: {92 / len(dataframe.columns) if len(dataframe.columns) > 0 else 10}%;
+            min-width: 80px;  /* Ensure minimum visibility */
+        }}
+        
+        /* Ensure all columns are visible - no hiding */
+        .data-table th,
+        .data-table td {{
+            display: table-cell !important;
+            visibility: visible !important;
+        }}
+        
+        /* For very wide tables, allow horizontal scrolling in print */
         @media print {{
             .data-table {{
                 font-size: {table_font_size};
+                width: 100%;
+                table-layout: fixed;
             }}
             .data-table th,
             .data-table td {{
                 padding: {cell_padding};
+                word-wrap: break-word;
+                overflow-wrap: break-word;
             }}
         }}
     </style>
@@ -388,12 +454,34 @@ def build_pdf_from_dataframe(
     :return: PDF bytes
     :raises: ReportSchedulePdfFailedError if conversion fails
     """
+    logger.info("Starting build_pdf_from_dataframe with auto_resize_page=%s", auto_resize_page)
+    
     if pd is None:
+        logger.error("pandas is None - pandas not available")
         raise ReportSchedulePdfFailedError("pandas is required for DataFrame to PDF conversion")
+    
+    if not WEASYPRINT_AVAILABLE or weasyprint is None:
+        logger.error("WeasyPrint not available - cannot generate multi-page PDF with dynamic sizing")
+        logger.error("This means the enhanced PDF generation will fail and fall back to basic A4 portrait PDF")
+        logger.error("To fix this on Windows, install GTK libraries or use Windows Subsystem for Linux (WSL)")
+        raise ReportSchedulePdfFailedError(
+            "WeasyPrint is not available - GTK system libraries required on Windows. "
+            "Enhanced PDF generation with dynamic page sizing is not available. "
+            "The system will fall back to basic A4 portrait PDF generation."
+        )
+    
+    logger.info("pandas and weasyprint are available, proceeding with PDF generation")
+    
     try:
         html_content = generate_table_html(dataframe, title, description, auto_resize_page)
-        return build_pdf_from_html(html_content)
+        logger.info("Generated HTML content, length: %d characters", len(html_content))
+        
+        pdf_bytes = build_pdf_from_html(html_content)
+        logger.info("Successfully converted HTML to PDF, size: %d bytes", len(pdf_bytes))
+        
+        return pdf_bytes
     except Exception as ex:
+        logger.error("Error in build_pdf_from_dataframe: %s", str(ex))
         raise ReportSchedulePdfFailedError(
             f"Failed generating PDF from DataFrame: {str(ex)}"
         ) from ex
