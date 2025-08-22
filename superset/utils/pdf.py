@@ -36,10 +36,52 @@ except ModuleNotFoundError:
     weasyprint = None
 
 
+def estimate_table_width(dataframe: pd.DataFrame) -> int:
+    """
+    Estimate the width required for a table based on its content.
+    
+    :param dataframe: The pandas DataFrame to analyze
+    :return: Estimated width in pixels
+    """
+    if dataframe.empty:
+        return 300  # Minimum width for empty tables
+    
+    total_width = 80  # Base width for index column
+    
+    for column in dataframe.columns:
+        # Column header width
+        header_width = len(str(column)) * 8 + 20  # ~8px per character + padding
+        
+        # Sample content width (check first few rows for performance)
+        sample_size = min(10, len(dataframe))
+        content_widths = []
+        
+        for value in dataframe[column].head(sample_size):
+            if pd.isna(value):
+                content_widths.append(30)  # Width for empty/NA values
+            else:
+                # Estimate based on string length
+                str_value = str(value)
+                if len(str_value) > 50:  # Very long content
+                    content_widths.append(400)  # Cap at reasonable width
+                else:
+                    content_widths.append(len(str_value) * 8 + 16)
+        
+        # Use the maximum of header width and average content width
+        avg_content_width = sum(content_widths) / len(content_widths) if content_widths else 50
+        column_width = max(header_width, avg_content_width, 80)  # Minimum 80px per column
+        column_width = min(column_width, 250)  # Maximum 250px per column to prevent excessive width
+        
+        total_width += column_width
+    
+    return int(total_width)
+
+
 def generate_table_html(
     dataframe: pd.DataFrame, 
     title: str = "Report", 
-    description: str = ""
+    description: str = "",
+    auto_resize_page: bool = True
 ) -> str:
     """
     Generate HTML content for a pandas DataFrame with proper CSS for PDF generation.
@@ -47,8 +89,19 @@ def generate_table_html(
     :param dataframe: The pandas DataFrame to convert to HTML
     :param title: The title for the report
     :param description: Optional description text
+    :param auto_resize_page: Whether to automatically resize page based on table width
     :return: Complete HTML document string
     """
+    # Calculate estimated table width for dynamic page sizing
+    estimated_table_width = estimate_table_width(dataframe)
+    
+    logger.info(
+        "Generating PDF for table with %d columns, %d rows, estimated width: %d px",
+        len(dataframe.columns),
+        len(dataframe),
+        estimated_table_width
+    )
+    
     # Convert DataFrame to HTML table
     table_html = dataframe.to_html(
         na_rep="", 
@@ -58,27 +111,92 @@ def generate_table_html(
         table_id="report-table"
     )
     
-    # CSS for proper PDF formatting with multi-page support
-    css_styles = """
+    # Determine optimal page size based on table width
+    if auto_resize_page:
+        if estimated_table_width <= 550:  # A4 portrait usable width
+            page_size = "A4"
+            page_width = "210mm"
+            page_height = "297mm"
+            margin = "2cm 1.5cm"
+            orientation = "portrait"
+        elif estimated_table_width <= 750:  # A4 landscape usable width
+            page_size = "A4 landscape"
+            page_width = "297mm"
+            page_height = "210mm"
+            margin = "1.5cm 2cm"
+            orientation = "landscape"
+        elif estimated_table_width <= 1050:  # A3 portrait usable width
+            page_size = "A3"
+            page_width = "297mm"
+            page_height = "420mm"
+            margin = "2cm 1.5cm"
+            orientation = "portrait"
+        elif estimated_table_width <= 1400:  # A3 landscape usable width
+            page_size = "A3 landscape"
+            page_width = "420mm"
+            page_height = "297mm"
+            margin = "1.5cm 2cm"
+            orientation = "landscape"
+        elif estimated_table_width <= 2000:  # A2 landscape usable width
+            page_size = "A2 landscape"
+            page_width = "594mm"
+            page_height = "420mm"
+            margin = "2cm 2.5cm"
+            orientation = "landscape"
+        else:
+            # For very wide tables, calculate custom size
+            # Convert pixels to mm (roughly 3.78 pixels per mm)
+            table_width_mm = int(estimated_table_width / 3.78)
+            margin_mm = 40  # 2cm margins on each side
+            page_width_mm = table_width_mm + margin_mm
+            
+            # Ensure reasonable minimum and maximum page sizes
+            page_width_mm = max(page_width_mm, 420)  # At least A3 landscape width
+            page_width_mm = min(page_width_mm, 1682)  # Max A0 width
+            
+            page_width = f"{page_width_mm}mm"
+            page_height = "420mm"  # Use A2 height for very wide tables
+            page_size = f"{page_width} {page_height}"
+            margin = "2cm 2cm"
+            orientation = "custom"
+        
+        logger.info(
+            "Selected page size: %s (%s) for table width %d px",
+            page_size,
+            orientation,
+            estimated_table_width
+        )
+    else:
+        # Default A4 portrait for smaller tables
+        page_size = "A4"
+        page_width = "210mm"
+        page_height = "297mm"
+        margin = "2cm 1.5cm"
+        orientation = "portrait"
+    
+    # CSS for proper PDF formatting with dynamic page sizing
+    css_styles = f"""
     <style type="text/css">
-        @page {
-            size: A4;
-            margin: 2cm 1.5cm;
-            @bottom-center {
+        @page {{
+            size: {page_size};
+            margin: {margin};
+            @bottom-center {{
                 content: "Page " counter(page) " of " counter(pages);
                 font-size: 10pt;
                 color: #666;
-            }
-        }
+            }}
+        }}
         
-        body {
+        body {{
             font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
             font-size: 9pt;
             line-height: 1.4;
             color: #333;
             margin: 0;
             padding: 0;
-        }
+            width: 100%;
+            overflow-x: auto;
+        }}
         
         .header {
             margin-bottom: 20px;
@@ -99,14 +217,16 @@ def generate_table_html(
             margin-bottom: 10px;
         }
         
-        .data-table {
+        .data-table {{
             width: 100%;
             border-collapse: collapse;
             font-size: 8pt;
             margin-top: 10px;
-        }
+            table-layout: auto;
+            word-wrap: break-word;
+        }}
         
-        .data-table th {
+        .data-table th {{
             background-color: #f8f9fa;
             border: 1px solid #dee2e6;
             padding: 6px 8px;
@@ -114,14 +234,21 @@ def generate_table_html(
             font-weight: bold;
             color: #495057;
             page-break-inside: avoid;
-        }
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 150px;
+        }}
         
-        .data-table td {
+        .data-table td {{
             border: 1px solid #dee2e6;
             padding: 4px 8px;
             text-align: left;
             page-break-inside: avoid;
-        }
+            word-wrap: break-word;
+            max-width: 150px;
+            overflow: hidden;
+        }}
         
         .data-table tbody tr:nth-child(even) {
             background-color: #f8f9fa;
@@ -155,12 +282,25 @@ def generate_table_html(
         
         /* Specific styling for index column */
         .data-table th:first-child,
-        .data-table td:first-child {
+        .data-table td:first-child {{
             background-color: #e9ecef;
             font-weight: bold;
             text-align: center;
             width: 60px;
-        }
+            min-width: 60px;
+            max-width: 80px;
+        }}
+        
+        /* Responsive adjustments for very wide tables */
+        @media print {{
+            .data-table {{
+                font-size: {"7pt" if estimated_table_width > 1200 else "8pt"};
+            }}
+            .data-table th,
+            .data-table td {{
+                padding: {"3px 6px" if estimated_table_width > 1200 else "4px 8px"};
+            }}
+        }}
     </style>
     """
     
@@ -217,7 +357,8 @@ def build_pdf_from_html(html_content: str) -> bytes:
 def build_pdf_from_dataframe(
     dataframe: pd.DataFrame, 
     title: str = "Report", 
-    description: str = ""
+    description: str = "",
+    auto_resize_page: bool = True
 ) -> bytes:
     """
     Generate PDF from pandas DataFrame using HTML conversion.
@@ -225,11 +366,12 @@ def build_pdf_from_dataframe(
     :param dataframe: The pandas DataFrame to convert
     :param title: The title for the report  
     :param description: Optional description text
+    :param auto_resize_page: Whether to automatically resize page based on table width
     :return: PDF bytes
     :raises: ReportSchedulePdfFailedError if conversion fails
     """
     try:
-        html_content = generate_table_html(dataframe, title, description)
+        html_content = generate_table_html(dataframe, title, description, auto_resize_page)
         return build_pdf_from_html(html_content)
     except Exception as ex:
         raise ReportSchedulePdfFailedError(
