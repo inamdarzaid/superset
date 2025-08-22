@@ -165,7 +165,42 @@ def generate_table_html(
     
     # Determine optimal page size based on table width
     if auto_resize_page:
-        if estimated_table_width <= 550:  # A4 portrait usable width
+        # For tables with many columns, be more aggressive with page sizing
+        num_columns = len(dataframe.columns)
+        
+        logger.info(
+            "Determining page size for %d columns with estimated width %d px",
+            num_columns,
+            estimated_table_width
+        )
+        
+        if num_columns >= 10:  # Tables with 10+ columns need larger formats
+            # Force A3 landscape or larger for many columns
+            if estimated_table_width <= 1050:
+                page_size = "A3 landscape"
+                page_width = "420mm"
+                page_height = "297mm"
+                margin = "1.5cm 2cm"
+                orientation = "landscape"
+            else:
+                # Custom size for very wide tables
+                table_width_mm = int(estimated_table_width / 3.78)
+                margin_mm = 40
+                page_width_mm = max(table_width_mm + margin_mm, 500)  # Minimum 500mm for 10+ columns
+                page_width_mm = min(page_width_mm, 2000)
+                
+                page_width = f"{page_width_mm}mm"
+                page_height = "420mm"
+                page_size = f"{page_width} {page_height}"
+                margin = "2cm 2cm"
+                orientation = f"custom ({page_width_mm}mm wide)"
+        elif num_columns >= 8:  # Tables with 8-9 columns need A3
+            page_size = "A3 landscape"
+            page_width = "420mm"
+            page_height = "297mm"
+            margin = "1.5cm 2cm"
+            orientation = "landscape"
+        elif estimated_table_width <= 550:  # A4 portrait usable width
             page_size = "A4"
             page_width = "210mm"
             page_height = "297mm"
@@ -202,6 +237,11 @@ def generate_table_html(
             margin_mm = 40  # 2cm margins on each side
             page_width_mm = table_width_mm + margin_mm
             
+            # For tables with many columns, ensure minimum reasonable width
+            min_width_per_column = 25  # mm per column minimum
+            min_required_width = len(dataframe.columns) * min_width_per_column + 60  # +60 for index and margins
+            page_width_mm = max(page_width_mm, min_required_width)
+            
             # Ensure reasonable minimum and maximum page sizes
             page_width_mm = max(page_width_mm, 420)  # At least A3 landscape width
             page_width_mm = min(page_width_mm, 2000)  # Increased max width for very wide tables
@@ -213,17 +253,27 @@ def generate_table_html(
             orientation = f"custom ({page_width_mm}mm wide)"
             
             logger.info(
-                "Using custom page size %s for %d columns with total width %d px",
+                "Using custom page size %s for %d columns with total width %d px (min required: %d mm)",
                 page_size,
                 len(dataframe.columns),
-                estimated_table_width
+                estimated_table_width,
+                min_required_width
             )
         
         logger.info(
-            "Selected page size: %s (%s) for table width %d px",
+            "Selected page size: %s (%s) for %d columns with width %d px",
             page_size,
             orientation,
+            len(dataframe.columns),
             estimated_table_width
+        )
+        
+        # Debug log for troubleshooting
+        logger.info(
+            "Page sizing decision: %d columns -> %s page (%s)",
+            len(dataframe.columns),
+            page_size,
+            orientation
         )
     else:
         # Default A4 portrait for smaller tables
@@ -289,8 +339,9 @@ def generate_table_html(
             border-collapse: collapse;
             font-size: {table_font_size};
             margin-top: 10px;
-            table-layout: fixed;  /* Use fixed layout for better control */
+            table-layout: auto;  /* Revert to auto for better column handling */
             word-wrap: break-word;
+            white-space: nowrap;  /* Prevent text wrapping that might hide columns */
         }}
         
         .data-table th {{
@@ -302,9 +353,9 @@ def generate_table_html(
             color: #495057;
             page-break-inside: avoid;
             white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            /* Remove max-width constraint to prevent column truncation */
+            overflow: visible;  /* Allow content to be visible */
+            text-overflow: clip;  /* Don't use ellipsis */
+            min-width: 60px;  /* Ensure minimum column width */
         }}
         
         .data-table td {{
@@ -313,8 +364,9 @@ def generate_table_html(
             text-align: left;
             page-break-inside: avoid;
             word-wrap: break-word;
-            overflow: hidden;
-            /* Remove max-width constraint to prevent column truncation */
+            overflow: visible;  /* Allow content to be visible */
+            white-space: nowrap;  /* Prevent text wrapping */
+            min-width: 60px;  /* Ensure minimum column width */
         }}
         
         .data-table tbody tr:nth-child(even) {{
@@ -353,22 +405,8 @@ def generate_table_html(
             background-color: #e9ecef;
             font-weight: bold;
             text-align: center;
-            width: 8%;  /* Use percentage instead of fixed width */
-            min-width: 50px;
-        }}
-        
-        /* Dynamic column width based on number of columns */
-        .data-table th:not(:first-child),
-        .data-table td:not(:first-child) {{
-            width: {92 / len(dataframe.columns) if len(dataframe.columns) > 0 else 10}%;
-            min-width: 80px;  /* Ensure minimum visibility */
-        }}
-        
-        /* Ensure all columns are visible - no hiding */
-        .data-table th,
-        .data-table td {{
-            display: table-cell !important;
-            visibility: visible !important;
+            width: 60px;  /* Fixed width for index */
+            min-width: 60px;
         }}
         
         /* For very wide tables, allow horizontal scrolling in print */
@@ -376,13 +414,22 @@ def generate_table_html(
             .data-table {{
                 font-size: {table_font_size};
                 width: 100%;
-                table-layout: fixed;
+                table-layout: auto;
+                min-width: {estimated_table_width}px;  /* Ensure table is wide enough */
             }}
             .data-table th,
             .data-table td {{
                 padding: {cell_padding};
                 word-wrap: break-word;
                 overflow-wrap: break-word;
+                white-space: nowrap;
+            }}
+            
+            /* Ensure all columns are visible */
+            .data-table th,
+            .data-table td {{
+                display: table-cell !important;
+                visibility: visible !important;
             }}
         }}
     </style>
