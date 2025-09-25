@@ -17,6 +17,11 @@
  * under the License.
  */
 
+import dayjs, { Dayjs } from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+import customParseFormat from 'dayjs/plugin/customParseFormat';
+
 import { SEPARATOR } from './fetchTimeRange';
 import {
   CustomRangeDecodeType,
@@ -24,6 +29,22 @@ import {
   DateTimeGrainType,
   DateTimeModeType,
 } from './types';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+dayjs.extend(customParseFormat);
+
+const DAYJS_FORMAT = 'YYYY-MM-DD[T]HH:mm:ss';
+
+const dttmToDayjs = (dttm: string): Dayjs => {
+  if (dttm === 'now') {
+    return dayjs().utc().startOf('second');
+  }
+  if (dttm === 'today') {
+    return dayjs().utc().startOf('day');
+  }
+  return dayjs(dttm);
+};
 
 const iso8601 = String.raw`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:(?:[+-]\d\d:\d\d)|Z)?`;
 const datetimeConstant = String.raw`(?:TODAY|NOW)`;
@@ -79,7 +100,7 @@ export const customTimeRangeDecode = (
         customRange: {
           ...defaultCustomRange,
           sinceDatetime: since,
-          untilDatetime: until,
+          untilDatetime: dttmToDayjs(until).subtract(1, 'day').format(DAYJS_FORMAT),
           sinceMode,
           untilMode,
         },
@@ -104,7 +125,7 @@ export const customTimeRangeDecode = (
           sinceGrain: grain as DateTimeGrainType,
           sinceGrainValue: parseInt(grainValue, 10),
           sinceDatetime: dttm,
-          untilDatetime: dttm,
+          untilDatetime: dttmToDayjs(until).subtract(1, 'day').format(DAYJS_FORMAT),
           sinceMode: 'relative',
           untilMode,
         },

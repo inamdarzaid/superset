@@ -18,11 +18,16 @@
  */
 import rison from 'rison';
 import { isEmpty } from 'lodash';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
 import {
   SupersetClient,
   getClientErrorObject,
   ensureIsArray,
 } from '@superset-ui/core';
+import { customTimeRangeDecode } from './customTimeRangeDecode';
+
+dayjs.extend(utc);
 
 export const SEPARATOR = ' : ';
 
@@ -30,18 +35,20 @@ export const buildTimeRangeString = (since: string, until: string): string =>
   `${since}${SEPARATOR}${until}`;
 
 const formatDateEndpoint = (dttm: string, isStart?: boolean): string =>
-  dttm.replace('T00:00:00', '') || (isStart ? '-∞' : '∞');
+  dttm.replace('T00:00:00', '') || (isStart ? '∞' : '∞');
 
 export const formatTimeRange = (
   timeRange: string,
   columnPlaceholder = 'col',
+  isInclusive = false,
 ) => {
   const splitDateRange = timeRange.split(SEPARATOR);
   if (splitDateRange.length === 1) return timeRange;
+  const operator = isInclusive ? '≤' : '<';
   return `${formatDateEndpoint(
     splitDateRange[0],
     true,
-  )} ≤ ${columnPlaceholder} < ${formatDateEndpoint(splitDateRange[1])}`;
+  )} ≤ ${columnPlaceholder} ${operator} ${formatDateEndpoint(splitDateRange[1])}`;
 };
 
 export const formatTimeRangeComparison = (
@@ -81,12 +88,23 @@ export const fetchTimeRange = async (
   try {
     const response = await SupersetClient.get({ endpoint });
     if (isEmpty(shifts)) {
-      const timeRangeString = buildTimeRangeString(
-        response?.json?.result[0]?.since || '',
-        response?.json?.result[0]?.until || '',
-      );
+      const { customRange, matchedFlag } = customTimeRangeDecode(timeRange);
+      const isInclusive = matchedFlag && customRange.untilMode === 'specific';
+
+      const since = response?.json?.result[0]?.since || '';
+      let until = response?.json?.result[0]?.until || '';
+
+      if (isInclusive && until) {
+        until = dayjs
+          .utc(until)
+          .subtract(1, 'day')
+          .format('YYYY-MM-DD[T]HH:mm:ss');
+      }
+
+      const timeRangeString = buildTimeRangeString(since, until);
+
       return {
-        value: formatTimeRange(timeRangeString, columnPlaceholder),
+        value: formatTimeRange(timeRangeString, columnPlaceholder, isInclusive),
       };
     }
     const timeRanges = response?.json?.result.map((result: any) =>

@@ -69,7 +69,9 @@ export const customTimeRangeEncode = (customRange: CustomRangeType): string => {
     const since =
       sinceMode === 'specific' ? dttmToString(sinceDatetime) : sinceMode;
     const until =
-      untilMode === 'specific' ? dttmToString(untilDatetime) : untilMode;
+      untilMode === 'specific'
+        ? dttmToDayjs(untilDatetime).add(1, 'day').startOf('day').format(DAYJS_FORMAT)
+        : untilMode;
     return `${since} : ${until}`;
   }
 
@@ -84,7 +86,9 @@ export const customTimeRangeEncode = (customRange: CustomRangeType): string => {
   // relative : specific
   if (sinceMode === 'relative' && SPECIFIC_MODE.includes(untilMode)) {
     const until =
-      untilMode === 'specific' ? dttmToString(untilDatetime) : untilMode;
+      untilMode === 'specific'
+        ? dttmToDayjs(untilDatetime).add(1, 'day').startOf('day').format(DAYJS_FORMAT)
+        : untilMode;
     const since = `DATEADD(DATETIME("${until}"), ${-Math.abs(
       sinceGrainValue,
     )}, ${sinceGrain})`;
