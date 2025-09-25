@@ -330,13 +330,15 @@ export const useExploreAdditionalActionsMenu = (
               >
                 {t('Export to original .CSV')}
               </Menu.Item>
-              <Menu.Item
-                key={MENU_KEYS.EXPORT_TO_CSV_PIVOTED}
-                icon={<Icons.FileOutlined />}
-                disabled={!canDownloadCSV}
-              >
-                {t('Export to pivoted .CSV')}
-              </Menu.Item>
+              {isFeatureEnabled(FeatureFlag.ALLOW_NON_CSV_EXPORTS) && (
+                <Menu.Item
+                  key={MENU_KEYS.EXPORT_TO_CSV_PIVOTED}
+                  icon={<Icons.FileOutlined />}
+                  disabled={!canDownloadCSV}
+                >
+                  {t('Export to pivoted .CSV')}
+                </Menu.Item>
+              )}
             </>
           ) : (
             <Menu.Item
