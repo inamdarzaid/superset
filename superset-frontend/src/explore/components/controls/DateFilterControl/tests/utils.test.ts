@@ -35,7 +35,7 @@ describe('Custom TimeRange', () => {
           anchorMode: 'now',
           anchorValue: 'now',
         }),
-      ).toEqual('2021-01-20T00:00:00 : 2021-01-27T00:00:00');
+      ).toEqual('2021-01-20T00:00:00 : 2021-01-28T00:00:00');
     });
 
     it('2) specific : relative', () => {
@@ -106,7 +106,7 @@ describe('Custom TimeRange', () => {
           anchorValue: 'now',
         }),
       ).toEqual(
-        'DATEADD(DATETIME("2021-01-27T00:00:00"), -7, day) : 2021-01-27T00:00:00',
+        'DATEADD(DATETIME("2021-01-28T00:00:00"), -7, day) : 2021-01-28T00:00:00',
       );
     });
 
