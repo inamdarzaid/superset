@@ -347,26 +347,30 @@ export const useExploreAdditionalActionsMenu = (
               {t('Export to .CSV')}
             </Menu.Item>
           )}
-          <Menu.Item
-            key={MENU_KEYS.EXPORT_TO_JSON}
-            icon={<Icons.FileOutlined />}
-            disabled={!canDownloadCSV}
-          >
-            {t('Export to .JSON')}
-          </Menu.Item>
-          <Menu.Item
-            key={MENU_KEYS.DOWNLOAD_AS_IMAGE}
-            icon={<Icons.FileImageOutlined />}
-          >
-            {t('Download as image')}
-          </Menu.Item>
-          <Menu.Item
-            key={MENU_KEYS.EXPORT_TO_XLSX}
-            icon={<Icons.FileOutlined />}
-            disabled={!canDownloadCSV}
-          >
-            {t('Export to Excel')}
-          </Menu.Item>
+          {isFeatureEnabled(FeatureFlag.ALLOW_NON_CSV_EXPORTS) && (
+            <>
+              <Menu.Item
+                key={MENU_KEYS.EXPORT_TO_JSON}
+                icon={<Icons.FileOutlined />}
+                disabled={!canDownloadCSV}
+              >
+                {t('Export to .JSON')}
+              </Menu.Item>
+              <Menu.Item
+                key={MENU_KEYS.DOWNLOAD_AS_IMAGE}
+                icon={<Icons.FileImageOutlined />}
+              >
+                {t('Download as image')}
+              </Menu.Item>
+              <Menu.Item
+                key={MENU_KEYS.EXPORT_TO_XLSX}
+                icon={<Icons.FileOutlined />}
+                disabled={!canDownloadCSV}
+              >
+                {t('Export to Excel')}
+              </Menu.Item>
+            </>
+          )}
         </Menu.SubMenu>
         <Menu.SubMenu title={t('Share')} key={MENU_KEYS.SHARE_SUBMENU}>
           <Menu.Item key={MENU_KEYS.COPY_PERMALINK}>
